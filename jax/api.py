@@ -212,7 +212,7 @@ def disable_jit():
   ...   return y + 3
   ...
   >>> print(f(jax.numpy.array([1, 2, 3])))
-  Value of y is Traced<ShapedArray(int32[3]):JaxprTrace(level=-1/1)>
+  Value of y is Traced<ShapedArray(int32[3])>with<DynamicJaxprTrace(level=0/1)>
   [5 7 9]
 
   Here ``y`` has been abstracted by :py:func:`jit` to a :py:class:`ShapedArray`,
@@ -1606,11 +1606,12 @@ def make_jaxpr(fun: Callable,
   >>> jax.make_jaxpr(jax.grad(f))(3.0)
   { lambda  ; a.
     let b = cos a
-        c = cos b
-        d = mul 1.0 c
-        e = neg d
-        f = sin a
-        g = mul e f
+        c = sin a
+        _ = sin b
+        d = cos b
+        e = mul 1.0 d
+        f = neg e
+        g = mul f c
     in (g,) }
   """
   _check_callable(fun)

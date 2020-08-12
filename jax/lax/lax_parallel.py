@@ -32,8 +32,7 @@ from jax.interpreters import pxla
 from jax.util import partial, unzip2, prod
 from jax.lib import xla_client as xc
 from jax.config import config
-
-from jax.interpreters.pxla import axis_index
+from jax.core import axis_index
 
 xops = xc.ops
 
@@ -379,14 +378,24 @@ def _psum_transpose_rule(cts, axis_name, axis_index_groups):
 
 psum_p = core.Primitive('psum')
 psum_p.multiple_results = True
-psum_p.def_impl(partial(pxla.apply_parallel_primitive, psum_p))
 psum_p.def_abstract_eval(lambda *args, **params: map(raise_to_shaped, args))
 pxla.soft_pmap_rules[psum_p] = \
     partial(_allreduce_soft_pmap_rule, psum_p, lax._reduce_sum)
 xla.parallel_translations[psum_p] = _psum_translation_rule
-pxla.parallel_pure_rules[psum_p] = lambda *args, shape: (x * prod(shape) for x in args)
 ad.deflinear(psum_p, _psum_transpose_rule)
 pxla.multi_host_supported_collectives.add(psum_p)
+
+# We set a special bind rule for psum so that psum(1, 'i') can be evaluated at
+# tracing time.
+@psum_p.def_custom_bind
+def psum_bind(*args, axis_name, **params):
+  if all(not isinstance(x, core.Tracer) for x in args):
+    if type(axis_name) is tuple:
+      size = prod([core.axis_frame(name).size for name in axis_name])  # type: ignore
+    else:
+      size = core.axis_frame(axis_name).size  # type: ignore
+    return tuple(size * x for x in args)
+  return core.Primitive.bind(psum_p, *args, axis_name=axis_name, **params)
 
 
 pmax_p = core.Primitive('pmax')
@@ -949,16 +958,11 @@ parallel.papply_primitive_rules[lax.slice_p] = _slice_papply_rule
 parallel.papply_primitive_rules[lax.gather_p] = _gather_papply_rule
 
 
-@config.omnistaging_enablers.append
-def omnistaging_enabler() -> None:
-  # We set a special bind rule for psum so that psum(1, 'i') can be evaluated at
-  # tracing time.
-  @psum_p.def_custom_bind
-  def psum_bind(*args, axis_name, **params):
-    if all(not isinstance(x, core.Tracer) for x in args):
-      if type(axis_name) is tuple:
-        size = prod([core.axis_frame(name).size for name in axis_name])  # type: ignore
-      else:
-        size = core.axis_frame(axis_name).size  # type: ignore
-      return tuple(size * x for x in args)
-    return core.Primitive.bind(psum_p, *args, axis_name=axis_name, **params)
+@config.omnistaging_disablers.append
+def omnistaging_disabler() -> None:
+  global axis_index
+  axis_index = pxla.axis_index
+
+  psum_p.bind = partial(core.Primitive.bind, psum_p)
+  psum_p.def_impl(partial(pxla.apply_parallel_primitive, psum_p))
+  pxla.parallel_pure_rules[psum_p] = lambda *args, shape: (x * prod(shape) for x in args)

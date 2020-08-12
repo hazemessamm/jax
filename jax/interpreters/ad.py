@@ -555,9 +555,7 @@ def jvp_jaxpr(jaxpr, nonzeros, instantiate):
   f_jvp, out_nonzeros = f_jvp_traceable(jvp(f, instantiate=instantiate), nonzeros)
   tangent_avals = [aval for aval, nz in zip(jaxpr.in_avals, nonzeros) if nz]
   avals_in = list(it.chain(jaxpr.in_avals, tangent_avals))
-  pvals = [pe.PartialVal.unknown(aval) for aval in avals_in]
-  jaxpr_out, pvals_out, literals_out = pe.trace_to_jaxpr(f_jvp, pvals, instantiate=True)
-  avals_out, _ = unzip2(pvals_out)
+  jaxpr_out, avals_out, literals_out = pe.trace_to_jaxpr_dynamic(f_jvp, avals_in)
   jaxpr_out = core.TypedJaxpr(jaxpr_out, literals_out, avals_in, avals_out)
   return jaxpr_out, out_nonzeros()
 
@@ -680,9 +678,8 @@ def defvjp2(prim, *vjps):
   defvjp_all(prim, vjpmaker)
 
 
-# TODO(mattjj): remove when omnistaging fully lands
-@config.omnistaging_enablers.append
-def omnistaging_enabler() -> None:
+@config.omnistaging_disablers.append
+def omnistaging_disabler() -> None:
   global jvp_jaxpr
 
   def jvp_jaxpr(jaxpr, nonzeros, instantiate):
@@ -691,6 +688,8 @@ def omnistaging_enabler() -> None:
     f_jvp, out_nonzeros = f_jvp_traceable(jvp(f, instantiate=instantiate), nonzeros)
     tangent_avals = [aval for aval, nz in zip(jaxpr.in_avals, nonzeros) if nz]
     avals_in = list(it.chain(jaxpr.in_avals, tangent_avals))
-    jaxpr_out, avals_out, literals_out = pe.trace_to_jaxpr_dynamic(f_jvp, avals_in)
+    pvals = [pe.PartialVal.unknown(aval) for aval in avals_in]
+    jaxpr_out, pvals_out, literals_out = pe.trace_to_jaxpr(f_jvp, pvals, instantiate=True)
+    avals_out, _ = unzip2(pvals_out)
     jaxpr_out = core.TypedJaxpr(jaxpr_out, literals_out, avals_in, avals_out)
     return jaxpr_out, out_nonzeros()

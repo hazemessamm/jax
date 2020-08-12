@@ -597,7 +597,7 @@ def _xla_callable(fun: lu.WrappedFun, device, backend, name, donated_invars, *ar
       raise core.UnexpectedTracerError("Encountered an unexpected tracer.")
   else:
     pvals: Sequence[pe.PartialVal] = [pe.PartialVal.unknown(aval) for aval in abstract_args]
-    jaxpr, pvals, consts = pe.trace_to_jaxpr(
+    jaxpr, pvals, consts = pe.trace_to_jaxpr(  # type: ignore
         fun, pvals, instantiate=False, stage_out=True, bottom=True)
   map(prefetch, it.chain(consts, jaxpr_literals(jaxpr)))
   jaxpr = apply_outfeed_rewriter(jaxpr)
@@ -608,7 +608,7 @@ def _xla_callable(fun: lu.WrappedFun, device, backend, name, donated_invars, *ar
   if config.omnistaging_enabled:
     result_handlers = tuple(aval_to_result_handler(device, a) for a in out_avals)
   else:
-    result_handlers = tuple(map(partial(_pval_to_result_handler, device), pvals))
+    result_handlers = tuple(map(partial(_pval_to_result_handler, device), pvals))  # type: ignore
 
   # Computations that only produce constants and/or only rearrange their inputs,
   # which are often produced from partial evaluation, don't need compilation,
@@ -1293,27 +1293,25 @@ def _call_translation_rule(c, axis_env, in_nodes, name_stack,
 call_translations[core.call_p] = _call_translation_rule
 
 
-# TODO(mattjj): remove when omnistaging fully lands
+def _axis_index_translation_rule(c, *, axis_name, axis_env, platform):
+  div = xb.constant(c, np.array(axis_env.nreps // prod(axis_env.sizes),
+                                dtype=np.uint32))
+  mod = xb.constant(c, np.array(axis_env.sizes[-1], dtype=np.uint32))
+  unsigned_index = xops.Rem(xops.Div(xops.ReplicaId(c), div), mod)
+  return xops.ConvertElementType(unsigned_index, xb.dtype_to_etype(np.int32))
+parallel_translations[core.axis_index_p] = _axis_index_translation_rule  # type: ignore
 
-@config.omnistaging_enablers.append
-def omnistaging_enabler() -> None:
+
+@config.omnistaging_disablers.append
+def omnistaging_disabler() -> None:
   global _pval_to_result_handler
-  del _pval_to_result_handler
 
-  def _axis_index_translation_rule(c, *, axis_name, axis_env, platform):
-    div = xb.constant(c, np.array(axis_env.nreps // prod(axis_env.sizes),
-                                  dtype=np.uint32))
-    mod = xb.constant(c, np.array(axis_env.sizes[-1], dtype=np.uint32))
-    unsigned_index = xops.Rem(xops.Div(xops.ReplicaId(c), div), mod)
-    return xops.ConvertElementType(unsigned_index, xb.dtype_to_etype(np.int32))
-  parallel_translations[core.axis_index_p] = _axis_index_translation_rule  # type: ignore
+  def _pval_to_result_handler(device, pval):
+    pv, const = pval
+    if pv is None:
+      const = _device_put_impl(const, device) if device else const
+      return lambda _: const
+    else:
+      return aval_to_result_handler(device, pv)
 
-def _pval_to_result_handler(device, pval):
-  pv, const = pval
-  if pv is None:
-    const = _device_put_impl(const, device) if device else const
-    return lambda _: const
-  else:
-    return aval_to_result_handler(device, pv)
-
-pe.staged_out_calls.add(xla_call_p)
+  pe.staged_out_calls.add(xla_call_p)  # type: ignore
